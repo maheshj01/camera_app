@@ -9,6 +9,22 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+Future<void> main() async {
+  // Fetch the available cameras before initializing the app.
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    // orientation lock
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+    _cameras = await availableCameras();
+  } on CameraException catch (e) {
+    _logError(e.code, e.description);
+  }
+  runApp(const CameraApp());
+}
+
 /// Camera example home widget.
 class CameraExampleHome extends StatefulWidget {
   /// Default Constructor
@@ -118,7 +134,7 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
           Positioned.fill(child: _cameraPreviewWidget()),
           // Zoom indicator
           Positioned(
-            bottom: 140,
+            bottom: 120,
             left: 0,
             right: 0,
             child: Center(
@@ -154,6 +170,22 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
                   }
                 },
               ),
+            ),
+          ),
+          // Flash button
+          Positioned(
+            bottom: 50,
+            left: 50,
+            child: FlashButton(color: Colors.white, controller: controller!),
+          ),
+          Positioned(
+            top: 20,
+            left: 4,
+            child: BackButton(
+              color: Colors.white,
+              onPressed: () {
+                Navigator.pop(context);
+              },
             ),
           ),
         ],
@@ -440,44 +472,70 @@ class CameraApp extends StatelessWidget {
 List<CameraDescription> get cameras => _cameras;
 List<CameraDescription> _cameras = <CameraDescription>[];
 
-Future<void> main() async {
-  // Fetch the available cameras before initializing the app.
-  try {
-    WidgetsFlutterBinding.ensureInitialized();
-    _cameras = await availableCameras();
-  } on CameraException catch (e) {
-    _logError(e.code, e.description);
-  }
-  runApp(const CameraApp());
-}
-
-class CaptureButton extends StatelessWidget {
+class CaptureButton extends StatefulWidget {
   final VoidCallback onPressed;
   const CaptureButton({super.key, required this.onPressed});
 
   @override
+  State<CaptureButton> createState() => _CaptureButtonState();
+}
+
+class _CaptureButtonState extends State<CaptureButton> {
+  bool isPressed = false;
+
+  @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.lightImpact();
-        onPressed();
-      },
+    final bool isIOS = Platform.isIOS;
+    Widget androidCaptureButton = Container(
+      width: 70,
+      height: 70,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 6),
+      ),
       child: Container(
-        width: 70,
-        height: 70,
-        decoration: BoxDecoration(
+        margin: const EdgeInsets.all(6),
+        decoration: const BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white, width: 6),
-        ),
-        child: Container(
-          margin: const EdgeInsets.all(6),
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white,
-          ),
+          color: Colors.white,
         ),
       ),
     );
+
+    Widget iosCaptureButton = Container(
+      width: 70,
+      height: 70,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 4),
+      ),
+      child: Container(
+        margin: const EdgeInsets.all(2),
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white,
+        ),
+      ),
+    );
+
+    return GestureDetector(
+        onTap: isPressed
+            ? null
+            : () {
+                setState(() {
+                  isPressed = true;
+                });
+                HapticFeedback.lightImpact();
+                widget.onPressed();
+                Future.delayed(const Duration(milliseconds: 3000), () {
+                  if (mounted) {
+                    setState(() {
+                      isPressed = false;
+                    });
+                  }
+                });
+              },
+        child: isIOS ? iosCaptureButton : androidCaptureButton);
   }
 }
 
@@ -514,17 +572,16 @@ class ZoomIndicator extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               margin: const EdgeInsets.symmetric(horizontal: 2),
               decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xFFD4AF37)
-                    : Colors.transparent,
+                color:
+                    isSelected ? const Color(0xFFD4AF37) : Colors.transparent,
                 borderRadius: BorderRadius.circular(15),
               ),
               child: Text(
                 zoom == 0.5
                     ? '.5'
                     : zoom == 1.0
-                    ? '1x'
-                    : '${zoom.toInt()}',
+                        ? '1x'
+                        : '${zoom.toInt()}',
                 style: TextStyle(
                   color: isSelected ? Colors.black : Colors.white,
                   fontSize: 16,
@@ -535,6 +592,56 @@ class ZoomIndicator extends StatelessWidget {
           );
         }).toList(),
       ),
+    );
+  }
+}
+
+class FlashButton extends StatefulWidget {
+  final CameraController controller;
+  final Color? color;
+  const FlashButton(
+      {super.key, required this.controller, this.color = Colors.white});
+
+  @override
+  State<FlashButton> createState() => FlashButtonState();
+}
+
+class FlashButtonState extends State<FlashButton> {
+  List<FlashMode> flashModes = [
+    FlashMode.auto,
+    FlashMode.always,
+    FlashMode.off,
+    FlashMode.torch,
+  ];
+
+  final flashIcons = [
+    Icons.flash_auto,
+    Icons.flash_on,
+    Icons.flash_off,
+    Icons.flashlight_on,
+  ];
+
+  FlashMode _currentFlashMode = FlashMode.auto;
+
+  int _currentFlashModeIndex = 0;
+
+  void _toggleFlashMode() {
+    HapticFeedback.lightImpact();
+    setState(() {
+      _currentFlashModeIndex = (_currentFlashModeIndex + 1) % flashModes.length;
+      _currentFlashMode = flashModes[_currentFlashModeIndex];
+    });
+    widget.controller.setFlashMode(_currentFlashMode);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(
+        flashIcons[_currentFlashModeIndex],
+        color: widget.color,
+      ),
+      onPressed: _toggleFlashMode,
     );
   }
 }
