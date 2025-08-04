@@ -52,7 +52,8 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
   double _maxAvailableZoom = 1.0;
   double _currentScale = 1.0;
   double _baseScale = 1.0;
-
+  late final AnimationController _focusModeControlRowAnimationController;
+  late final CurvedAnimation _focusModeControlRowAnimation;
   // Counting pointers (number of user fingers on screen)
   int _pointers = 0;
 
@@ -60,6 +61,14 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _focusModeControlRowAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _focusModeControlRowAnimation = CurvedAnimation(
+      parent: _focusModeControlRowAnimationController,
+      curve: Curves.easeInCubic,
+    );
     _initializeCameraController(cameras.first);
   }
 
@@ -67,6 +76,9 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     controller?.dispose();
+    _focusModeControlRowAnimationController.dispose();
+    _focusModeControlRowAnimation.dispose();
+
     super.dispose();
   }
 
@@ -149,6 +161,16 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
     );
   }
 
+  void onFocusModeButtonPressed(Offset offset, BoxConstraints constraints) {
+    if (_focusModeControlRowAnimationController.value == 1) {
+      _focusModeControlRowAnimationController.reverse();
+    } else {
+      _focusModeControlRowAnimationController.forward();
+    }
+
+    controller!.setFocusPoint(offset);
+  }
+
   /// Display the preview from the camera (or a message if the preview is not available).
   Widget _cameraPreviewWidget() {
     final CameraController? cameraController = controller;
@@ -165,7 +187,18 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
     } else {
       return Listener(
         onPointerDown: (_) => _pointers++,
-        onPointerUp: (_) => _pointers--,
+        onPointerUp: (PointerUpEvent event) {
+          final constraints = BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width,
+            maxHeight: MediaQuery.of(context).size.height,
+          );
+          _pointers--;
+          final offset = Offset(
+            event.localPosition.dx / constraints.maxWidth,
+            event.localPosition.dy / constraints.maxHeight,
+          );
+          onFocusModeButtonPressed(offset, constraints);
+        },
         child: CameraPreview(
           controller!,
           child: LayoutBuilder(
