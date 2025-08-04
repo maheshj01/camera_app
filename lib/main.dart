@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 late List<CameraDescription> _cameras;
 
@@ -35,22 +36,50 @@ class CameraWidget extends StatefulWidget {
   State<CameraWidget> createState() => _CameraWidgetState();
 }
 
-class _CameraWidgetState extends State<CameraWidget> {
+class _CameraWidgetState extends State<CameraWidget>
+    with WidgetsBindingObserver {
   late CameraController controller;
   double _currentZoom = 1.0;
-  final List<double> _zoomLevels = [0.5, 1.0, 2.0];
+  final List<double> _zoomLevels = [0.5, 1.0, 4.0, 8.0];
+  late CameraDescription _currentCamera;
+  bool _isSwitchingCamera = false;
 
   @override
   void initState() {
     super.initState();
-    controller = CameraController(_cameras[0], ResolutionPreset.ultraHigh);
+    WidgetsBinding.instance.addObserver(this);
+    // Start with the main camera (usually index 0)
+    _currentCamera = _cameras[0];
+    _initializeCamera();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final CameraController? cameraController = controller;
+
+    // App state changed before we got the chance to initialize.
+    if (cameraController == null || !cameraController.value.isInitialized) {
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive) {
+      cameraController.dispose();
+    } else if (state == AppLifecycleState.resumed) {
+      _initializeCamera();
+    }
+  }
+
+  void _initializeCamera() {
+    controller = CameraController(_currentCamera, ResolutionPreset.ultraHigh);
     controller
         .initialize()
         .then((_) {
           if (!mounted) {
             return;
           }
-          setState(() {});
+          setState(() {
+            _isSwitchingCamera = false;
+          });
         })
         .catchError((Object e) {
           if (e is CameraException) {
@@ -63,26 +92,83 @@ class _CameraWidgetState extends State<CameraWidget> {
                 break;
             }
           }
+          setState(() {
+            _isSwitchingCamera = false;
+          });
         });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     controller.dispose();
     super.dispose();
   }
 
-  void _setZoom(double zoom) {
+  Future<void> _setZoom(double zoom) async {
     setState(() {
       _currentZoom = zoom;
     });
-    controller.setZoomLevel(zoom);
+
+    // Switch to ultra-wide camera for 0.5x zoom
+    if (zoom == 0.5) {
+      final length = _cameras.length;
+      print('length: $length ${_cameras.last.lensDirection} ');
+      // Use the last back camera (typically ultra-wide)
+      if (length > 1) {
+        final targetCamera = _cameras.lastWhere(
+          (camera) => camera.lensDirection == CameraLensDirection.back,
+          orElse: () {
+            print('no back camera found');
+            return _cameras[0];
+          },
+        );
+
+        if (targetCamera != _currentCamera) {
+          setState(() {
+            _isSwitchingCamera = true;
+          });
+
+          await controller.dispose();
+          _currentCamera = targetCamera;
+          _initializeCamera();
+          print('targetCamera: $targetCamera');
+          return;
+        }
+      }
+    } else {
+      // Switch back to main camera for other zoom levels
+      if (_currentCamera != _cameras[0]) {
+        setState(() {
+          _isSwitchingCamera = true;
+        });
+
+        await controller.dispose();
+        _currentCamera = _cameras[0];
+        _initializeCamera();
+        // Set the digital zoom after camera switch
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (controller.value.isInitialized) {
+            controller.setZoomLevel(zoom);
+          }
+        });
+        return;
+      }
+
+      // For main camera, use digital zoom
+      if (controller.value.isInitialized) {
+        controller.setZoomLevel(zoom);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!controller.value.isInitialized) {
-      return const Center(child: CircularProgressIndicator());
+    if (!controller.value.isInitialized || _isSwitchingCamera) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
     return Scaffold(
       backgroundColor: Colors.black,
@@ -110,6 +196,7 @@ class _CameraWidgetState extends State<CameraWidget> {
             child: Center(
               child: CameraButton(
                 onPressed: () async {
+                  HapticFeedback.lightImpact();
                   try {
                     final image = await controller.takePicture();
                     Navigator.push(
@@ -142,25 +229,17 @@ class CameraButton extends StatelessWidget {
     return GestureDetector(
       onTap: onPressed,
       child: Container(
-        width: 80,
-        height: 80,
+        width: 70,
+        height: 70,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: Colors.white,
-          border: Border.all(color: Colors.white, width: 4),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.3),
-              blurRadius: 8,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          border: Border.all(color: Colors.white, width: 6),
         ),
         child: Container(
-          margin: const EdgeInsets.all(8),
+          margin: const EdgeInsets.all(6),
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.red,
+            color: Colors.white,
           ),
         ),
       ),
