@@ -1,58 +1,76 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-late List<CameraDescription> _cameras;
-
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  _cameras = await availableCameras();
-  runApp(const CameraApp());
-}
-
-class CameraApp extends StatefulWidget {
-  const CameraApp({super.key});
+/// Camera example home widget.
+class CameraExampleHome extends StatefulWidget {
+  /// Default Constructor
+  const CameraExampleHome({super.key});
 
   @override
-  State<CameraApp> createState() => _CameraAppState();
-}
-
-class _CameraAppState extends State<CameraApp> {
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(home: CameraWidget());
+  State<CameraExampleHome> createState() {
+    return _CameraExampleHomeState();
   }
 }
 
-/// CameraWidget is the Main Application.
-class CameraWidget extends StatefulWidget {
-  /// Default Constructor
-  const CameraWidget({super.key});
-
-  @override
-  State<CameraWidget> createState() => _CameraWidgetState();
+/// Returns a suitable camera icon for [direction].
+IconData getCameraLensIcon(CameraLensDirection direction) {
+  switch (direction) {
+    case CameraLensDirection.back:
+      return Icons.camera_rear;
+    case CameraLensDirection.front:
+      return Icons.camera_front;
+    case CameraLensDirection.external:
+      return Icons.camera;
+  }
+  // This enum is from a different package, so a new value could be added at
+  // any time. The example should keep working if that happens.
+  // ignore: dead_code
+  return Icons.camera;
 }
 
-class _CameraWidgetState extends State<CameraWidget>
-    with WidgetsBindingObserver {
-  late CameraController controller;
-  double _currentZoom = 1.0;
-  final List<double> _zoomLevels = [0.5, 1.0, 4.0, 8.0];
-  late CameraDescription _currentCamera;
-  bool _isSwitchingCamera = false;
+void _logError(String code, String? message) {
+  // ignore: avoid_print
+  print('Error: $code${message == null ? '' : '\nError Message: $message'}');
+}
+
+class _CameraExampleHomeState extends State<CameraExampleHome>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
+  CameraController? controller;
+  XFile? imageFile;
+  XFile? videoFile;
+  VoidCallback? videoPlayerListener;
+  bool enableAudio = true;
+  double _minAvailableZoom = 1.0;
+  double _maxAvailableZoom = 1.0;
+  double _currentScale = 1.0;
+  double _baseScale = 1.0;
+
+  // Counting pointers (number of user fingers on screen)
+  int _pointers = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Start with the main camera (usually index 0)
-    _currentCamera = _cameras[0];
-    _initializeCamera();
+    _initializeCameraController(cameras.first);
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    controller?.dispose();
+    super.dispose();
+  }
+
+  // #docregion AppLifecycle
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final CameraController? cameraController = controller;
@@ -65,106 +83,17 @@ class _CameraWidgetState extends State<CameraWidget>
     if (state == AppLifecycleState.inactive) {
       cameraController.dispose();
     } else if (state == AppLifecycleState.resumed) {
-      _initializeCamera();
+      _initializeCameraController(cameraController.description);
     }
   }
 
-  void _initializeCamera() {
-    controller = CameraController(_currentCamera, ResolutionPreset.ultraHigh);
-    controller
-        .initialize()
-        .then((_) {
-          if (!mounted) {
-            return;
-          }
-          setState(() {
-            _isSwitchingCamera = false;
-          });
-        })
-        .catchError((Object e) {
-          if (e is CameraException) {
-            switch (e.code) {
-              case 'CameraAccessDenied':
-                // Handle access errors here.
-                break;
-              default:
-                // Handle other errors here.
-                break;
-            }
-          }
-          setState(() {
-            _isSwitchingCamera = false;
-          });
-        });
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    controller.dispose();
-    super.dispose();
-  }
-
-  Future<void> _setZoom(double zoom) async {
-    setState(() {
-      _currentZoom = zoom;
-    });
-
-    // Switch to ultra-wide camera for 0.5x zoom
-    if (zoom == 0.5) {
-      final length = _cameras.length;
-      print('length: $length ${_cameras.last.lensDirection} ');
-      // Use the last back camera (typically ultra-wide)
-      if (length > 1) {
-        final targetCamera = _cameras.lastWhere(
-          (camera) => camera.lensDirection == CameraLensDirection.back,
-          orElse: () {
-            print('no back camera found');
-            return _cameras[0];
-          },
-        );
-
-        if (targetCamera != _currentCamera) {
-          setState(() {
-            _isSwitchingCamera = true;
-          });
-
-          await controller.dispose();
-          _currentCamera = targetCamera;
-          _initializeCamera();
-          print('targetCamera: $targetCamera');
-          return;
-        }
-      }
-    } else {
-      // Switch back to main camera for other zoom levels
-      if (_currentCamera != _cameras[0]) {
-        setState(() {
-          _isSwitchingCamera = true;
-        });
-
-        await controller.dispose();
-        _currentCamera = _cameras[0];
-        _initializeCamera();
-        // Set the digital zoom after camera switch
-        Future.delayed(const Duration(milliseconds: 200), () {
-          if (controller.value.isInitialized) {
-            controller.setZoomLevel(zoom);
-          }
-        });
-        return;
-      }
-
-      // For main camera, use digital zoom
-      if (controller.value.isInitialized) {
-        controller.setZoomLevel(zoom);
-      }
-    }
-  }
+  // #enddocregion AppLifecycle
+  double _currentZoom = 1.0;
+  final List<double> _zoomLevels = [1.0, 4.0, 8.0];
 
   @override
   Widget build(BuildContext context) {
-    if (!controller.value.isInitialized || _isSwitchingCamera) {
+    if (controller == null || !controller!.value.isInitialized) {
       return const Scaffold(
         backgroundColor: Colors.black,
         body: Center(child: CircularProgressIndicator()),
@@ -174,7 +103,7 @@ class _CameraWidgetState extends State<CameraWidget>
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          Positioned.fill(child: CameraPreview(controller)),
+          Positioned.fill(child: _cameraPreviewWidget()),
           // Zoom indicator
           Positioned(
             bottom: 140,
@@ -184,7 +113,19 @@ class _CameraWidgetState extends State<CameraWidget>
               child: ZoomIndicator(
                 currentZoom: _currentZoom,
                 zoomLevels: _zoomLevels,
-                onZoomChanged: _setZoom,
+                onZoomChanged: (double zoom) {
+                  if (zoom == 0.5) {
+                    controller!.setZoomLevel(_minAvailableZoom);
+                    setState(() {
+                      _currentZoom = 0.5;
+                    });
+                    return;
+                  }
+                  setState(() {
+                    controller!.setZoomLevel(zoom);
+                    _currentZoom = zoom;
+                  });
+                },
               ),
             ),
           ),
@@ -194,21 +135,10 @@ class _CameraWidgetState extends State<CameraWidget>
             left: 0,
             right: 0,
             child: Center(
-              child: CameraButton(
-                onPressed: () async {
-                  HapticFeedback.lightImpact();
-                  try {
-                    final image = await controller.takePicture();
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ImagePreview(image: image),
-                      ),
-                    );
-                    // Handle the captured image here
-                    print('Picture saved to ${image.path}');
-                  } catch (e) {
-                    print('Error taking picture: $e');
+              child: CaptureButton(
+                onPressed: () {
+                  if (controller != null && controller!.value.isInitialized) {
+                    onTakePictureButtonPressed();
                   }
                 },
               ),
@@ -218,16 +148,287 @@ class _CameraWidgetState extends State<CameraWidget>
       ),
     );
   }
+
+  /// Display the preview from the camera (or a message if the preview is not available).
+  Widget _cameraPreviewWidget() {
+    final CameraController? cameraController = controller;
+
+    if (cameraController == null || !cameraController.value.isInitialized) {
+      return const Text(
+        'Tap a camera',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 24.0,
+          fontWeight: FontWeight.w900,
+        ),
+      );
+    } else {
+      return Listener(
+        onPointerDown: (_) => _pointers++,
+        onPointerUp: (_) => _pointers--,
+        child: CameraPreview(
+          controller!,
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onScaleStart: _handleScaleStart,
+                onScaleUpdate: _handleScaleUpdate,
+                onTapDown: (TapDownDetails details) =>
+                    onViewFinderTap(details, constraints),
+              );
+            },
+          ),
+        ),
+      );
+    }
+  }
+
+  void _handleScaleStart(ScaleStartDetails details) {
+    _baseScale = _currentScale;
+  }
+
+  Future<void> _handleScaleUpdate(ScaleUpdateDetails details) async {
+    try {
+      // When there are not exactly two fingers on screen don't scale
+      if (controller == null || _pointers != 2) {
+        return;
+      }
+
+      _currentScale = (_baseScale * details.scale).clamp(
+        _minAvailableZoom,
+        _maxAvailableZoom,
+      );
+
+      await controller!.setZoomLevel(_currentScale);
+      final zoom = double.parse(_currentScale.toStringAsPrecision(2));
+      if (_zoomLevels.contains(zoom)) {
+        setState(() {
+          _currentZoom = zoom;
+        });
+      }
+    } catch (e) {
+      print('Error: $e');
+    }
+  }
+
+  String timestamp() => DateTime.now().millisecondsSinceEpoch.toString();
+
+  void showInSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void onViewFinderTap(TapDownDetails details, BoxConstraints constraints) {
+    if (controller == null) {
+      return;
+    }
+
+    final CameraController cameraController = controller!;
+
+    final Offset offset = Offset(
+      details.localPosition.dx / constraints.maxWidth,
+      details.localPosition.dy / constraints.maxHeight,
+    );
+    cameraController.setExposurePoint(offset);
+    cameraController.setFocusPoint(offset);
+  }
+
+  Future<void> onNewCameraSelected(CameraDescription cameraDescription) async {
+    if (controller != null) {
+      return controller!.setDescription(cameraDescription);
+    } else {
+      return _initializeCameraController(cameraDescription);
+    }
+  }
+
+  Future<void> _initializeCameraController(
+    CameraDescription cameraDescription,
+  ) async {
+    final CameraController cameraController = CameraController(
+      cameraDescription,
+      ResolutionPreset.ultraHigh,
+      enableAudio: enableAudio,
+      imageFormatGroup: ImageFormatGroup.jpeg,
+    );
+
+    controller = cameraController;
+
+    // If the controller is updated then update the UI.
+    cameraController.addListener(() {
+      if (mounted) {
+        setState(() {});
+      }
+      if (cameraController.value.hasError) {
+        showInSnackBar(
+          'Camera error ${cameraController.value.errorDescription}',
+        );
+      }
+    });
+
+    try {
+      await cameraController.initialize();
+      await Future.wait(<Future<Object?>>[
+        // The exposure mode is currently not supported on the web.
+        cameraController.getMaxZoomLevel().then((double value) {
+          print('maxAvailableZoom: $value');
+          return _maxAvailableZoom = value;
+        }),
+        cameraController.getMinZoomLevel().then((double value) {
+          print('minAvailableZoom: $value');
+          if (value < 1.0) {
+            setState(() {
+              _zoomLevels.insert(0, 0.5);
+            });
+          }
+          return _minAvailableZoom = value;
+        }),
+      ]);
+    } on CameraException catch (e) {
+      switch (e.code) {
+        case 'CameraAccessDenied':
+          showInSnackBar('You have denied camera access.');
+        case 'CameraAccessDeniedWithoutPrompt':
+          // iOS only
+          showInSnackBar('Please go to Settings app to enable camera access.');
+        case 'CameraAccessRestricted':
+          // iOS only
+          showInSnackBar('Camera access is restricted.');
+        case 'AudioAccessDenied':
+          showInSnackBar('You have denied audio access.');
+        case 'AudioAccessDeniedWithoutPrompt':
+          // iOS only
+          showInSnackBar('Please go to Settings app to enable audio access.');
+        case 'AudioAccessRestricted':
+          // iOS only
+          showInSnackBar('Audio access is restricted.');
+        default:
+          _showCameraException(e);
+      }
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> onTakePictureButtonPressed() async {
+    final XFile? file = await takePicture();
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => ImagePreview(image: file!)),
+      );
+    }
+  }
+
+  Future<void> onCaptureOrientationLockButtonPressed() async {
+    try {
+      if (controller != null) {
+        final CameraController cameraController = controller!;
+        if (cameraController.value.isCaptureOrientationLocked) {
+          await cameraController.unlockCaptureOrientation();
+          showInSnackBar('Capture orientation unlocked');
+        } else {
+          await cameraController.lockCaptureOrientation();
+          showInSnackBar(
+            'Capture orientation locked to ${cameraController.value.lockedCaptureOrientation.toString().split('.').last}',
+          );
+        }
+      }
+    } on CameraException catch (e) {
+      _showCameraException(e);
+    }
+  }
+
+  void onSetFocusModeButtonPressed(FocusMode mode) {
+    setFocusMode(mode).then((_) {
+      if (mounted) {
+        setState(() {});
+      }
+      showInSnackBar('Focus mode set to ${mode.toString().split('.').last}');
+    });
+  }
+
+  Future<void> setFocusMode(FocusMode mode) async {
+    if (controller == null) {
+      return;
+    }
+
+    try {
+      await controller!.setFocusMode(mode);
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      rethrow;
+    }
+  }
+
+  Future<XFile?> takePicture() async {
+    final CameraController? cameraController = controller;
+    if (cameraController == null || !cameraController.value.isInitialized) {
+      showInSnackBar('Error: select a camera first.');
+      return null;
+    }
+
+    if (cameraController.value.isTakingPicture) {
+      // A capture is already pending, do nothing.
+      return null;
+    }
+
+    try {
+      final XFile file = await cameraController.takePicture();
+      return file;
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      return null;
+    }
+  }
+
+  void _showCameraException(CameraException e) {
+    _logError(e.code, e.description);
+    showInSnackBar('Error: ${e.code}\n${e.description}');
+  }
 }
 
-class CameraButton extends StatelessWidget {
+/// CameraApp is the Main Application.
+class CameraApp extends StatelessWidget {
+  /// Default Constructor
+  const CameraApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(home: CameraExampleHome());
+  }
+}
+
+/// Getting available cameras for testing.
+@visibleForTesting
+List<CameraDescription> get cameras => _cameras;
+List<CameraDescription> _cameras = <CameraDescription>[];
+
+Future<void> main() async {
+  // Fetch the available cameras before initializing the app.
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+    _cameras = await availableCameras();
+  } on CameraException catch (e) {
+    _logError(e.code, e.description);
+  }
+  runApp(const CameraApp());
+}
+
+class CaptureButton extends StatelessWidget {
   final VoidCallback onPressed;
-  const CameraButton({super.key, required this.onPressed});
+  const CaptureButton({super.key, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onPressed,
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onPressed();
+      },
       child: Container(
         width: 70,
         height: 70,
@@ -272,7 +473,10 @@ class ZoomIndicator extends StatelessWidget {
         children: zoomLevels.map((zoom) {
           final isSelected = zoom == currentZoom;
           return GestureDetector(
-            onTap: () => onZoomChanged(zoom),
+            onTap: () {
+              HapticFeedback.lightImpact();
+              onZoomChanged(zoom);
+            },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               margin: const EdgeInsets.symmetric(horizontal: 2),
