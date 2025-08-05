@@ -334,6 +334,7 @@ class _CameraExampleHomeState extends State<CameraExampleHome>
 
     try {
       await cameraController.initialize();
+      await cameraController.lockCaptureOrientation(DeviceOrientation.portraitUp);
       await Future.wait(<Future<Object?>>[
         // The exposure mode is currently not supported on the web.
         cameraController.getMaxZoomLevel().then((double value) {
